@@ -1,0 +1,154 @@
+## A Machine Learning Prediction Algorithm for an Exercise  Dataset
+
+### Author: Sukanya Basu
+
+### Synopsis
+
+One thing that people regularly do is quantify how much of a particular activity they do. But they rarely quantify how well they do it. In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to measure how well they exercise. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+### Preprocessing the data
+
+First we load the data.
+
+```{r, cache=TRUE}
+
+library(downloader)
+download("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="training.csv")
+download("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="testing.csv")
+training = read.csv("training.csv")
+testing = read.csv("testing.csv")
+```
+
+Next we replace the missing values by zeros. We also drop the first seven columns of the dataset since they are not very useful for prediction purposes.
+
+```{r}
+training[is.na(training)] <- 0
+testing[is.na(testing)] <- 0
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+```
+
+We divide the data into a training set and a validation set.
+
+```{r}
+library(caret)
+set.seed(125)
+inTrain = createDataPartition(training$classe, p=0.7, list=FALSE)
+training_data = training[ inTrain,]
+validation_data = training[-inTrain,]
+```
+We extract only the numeric features of the training and testing datasets.
+
+```{r}
+numeric_features = which(lapply(training_data, class) %in% c("numeric"))
+training <- cbind(training_data$classe, training_data[, numeric_features])
+testing <- testing[, numeric_features]
+names(training)[1] <- "classe"
+```
+
+### Identifying the important predictors
+
+We first identify the near-zero-variance predictors as follows.
+
+```{r}
+library(dplyr)
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+head(nsv,5)
+```
+
+Note that most of the values in the percentUnique column of nsv are less than 20 as shown below.
+
+```{r}
+summary(nsv$percentUnique)
+```
+
+This suggests that most of the predictor variables have low variability in general. In this case, the predictors with freqRatio less than 20 have a smaller probability of being near-zero-variance predictors since they exhibit a lower level of skewness (see [2] page 4). We sort nsv in increasing order of freqRatio to identify the top five predictors with the least probability of being near-zero-variance predictors.
+
+```{r}
+nsv2 <- data.frame(rownames(nsv),nsv$freqRatio, nsv$nzv)
+names(nsv2) <- c("rownames", "freqRatio", "nzv")
+z1 <- arrange(nsv2, freqRatio)
+head(z1,5)
+```
+
+We present a feature plot and a correlation plot for these five predictors below.
+
+```{r}
+library(caret)
+library(psych)
+featurePlot(x=training[,c("gyros_dumbbell_z", "gyros_belt_z",
+                          "magnet_forearm_z", "pitch_belt", "gyros_dumbbell_x")],
+            y = training$classe, plot="pairs")
+
+corPlot(training[,c("gyros_dumbbell_z", "gyros_belt_z",
+                          "magnet_forearm_z", "pitch_belt", "gyros_dumbbell_x")])
+```
+
+We find a very strong negative correlation between the predictors gyros_dumbbell_x and gyros_dumbbell_z as shown by the red boxes in the plot. We also find a faint positive correlation between the predictors gyros_dumbbell_x and magnet_forearm_z as shown by the pale blue boxes in the plot. There are also various levels of negative correlation between the predictors as shown by the salmon-colored boxes.
+
+### Identifying predictors with the highest correlation
+
+Next we identify the predictors with the highest correlation and draw a correlation plot for them.
+
+```{r}
+M <- abs(cor(training[,-1]))
+diag(M) <- 0
+head(which(M > 0.8, arr.ind=T))
+library(psych)
+corPlot(training[, c("yaw_belt", "roll_belt","min_roll_belt",
+                    "avg_yaw_belt", "min_pitch_belt","avg_roll_belt")])
+```
+
+It is clear from the predominantly blue plot that all five variables are positively correlated to each other with varying strengths of correlation represented by the varying shades of blue. 
+
+### Defining and cross-validating our Support Vector Machine (SVM) model
+
+Now we are ready to define our Support Vector Machine (SVM) model to predict the 'classe' variable using all other numeric variables as predictors. 
+
+```{r, cache=TRUE}
+set.seed(325)
+library(e1071)
+svm_mod <- svm(classe ~ ., data=training)
+svm_mod
+```
+
+Next we cross-validate our model using the validation data set.
+
+```{r, cache=TRUE}
+predic <- predict(svm_mod, validation_data)
+summary(predic)
+```
+
+### Measuring the accuracy of our SVM model
+
+We measure the accuracy of our model by comparing the model prediction for the values of the 'classe' variable from the validation data with its true values. 
+
+```{r}
+confusionMatrix(predic,validation_data$classe)
+```
+
+A comparison of the plots of the predicted and true values for the 'classe' variable from the validation data set is shown below.
+
+```{r}
+par(mfrow = c(1,2))
+plot(predic,col="green", ylab="Frequency", 
+     main="SVM Model Prediction")
+plot(validation_data$classe, ylab="Frequency",col="blue", 
+     main="True Values")
+title("A comparison of the predicted and true values for the 'classe' variable", line = -23.5, outer = TRUE)
+```
+
+### Predicting test data using our SVM model
+
+Finally we use our SVM model to make predictions on the testing data.
+
+```{r}
+predict(svm_mod, testing)
+```
+
+### References
+
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.
+
+[2] Kuhn, Max. Building Predictive Models in R Using the caret Package. Journal of Statistical Software. November 2008, Volume 28, Issue 5.
